@@ -1,12 +1,12 @@
 # MEGA BRAIN - INGEST WORKFLOW
 # Padrão: Pedro (aios-core/squad-creator)
-# Versão: 1.0.0
+# Versão: 1.1.0 — local Whisper transcription via mlx-whisper
 
 workflow:
   id: wf-ingest
   name: "Material Ingestion"
-  description: "Ingere novo material no INBOX com metadados"
-  version: "1.0.0"
+  description: "Ingere novo material no INBOX com metadados. Suporta texto, áudio e vídeo."
+  version: "1.1.0"
 
   orchestrator: "@jarvis"
 
@@ -18,11 +18,27 @@ workflow:
     - name: source_file
       type: file
       required: false
-      description: "Arquivo local a ingerir"
+      description: "Arquivo local a ingerir (.txt, .docx, .pdf, .mp4, .m4a, .mp3...)"
     - name: source_code
       type: string
       required: true
       description: "Código da fonte (e.g., CG, JM)"
+    - name: whisper_model
+      type: string
+      required: false
+      default: "large-v3-turbo"
+      description: "Modelo mlx-whisper (tiny|medium|large-v3-turbo|large-v3)"
+    - name: whisper_lang
+      type: string
+      required: false
+      default: null
+      description: "Idioma forçado para Whisper (ex: pt, en). null = auto-detect"
+
+  constants:
+    AUDIO_VIDEO_EXTENSIONS: [".mp4", ".m4a", ".mp3", ".wav", ".ogg", ".flac",
+                              ".webm", ".mkv", ".mov", ".avi", ".aac", ".opus"]
+    TRANSCRIBE_SCRIPT: "core/intelligence/transcribe.py"
+    PYTHON39: "/Library/Developer/CommandLineTools/usr/bin/python3.9"
 
   phases:
     - id: phase_1
@@ -41,6 +57,30 @@ workflow:
               file: "${source_file}"
       checkpoint:
         id: CP_DOWNLOAD
+        blocking: true
+
+    - id: phase_1_5
+      name: "TRANSCRIPTION"
+      description: "Transcrição local via mlx-whisper (Apple M-series) — apenas para áudio/vídeo"
+      condition: "file_extension in AUDIO_VIDEO_EXTENSIONS"
+      steps:
+        - execute:
+            command: "shell"
+            script: |
+              ${PYTHON39} ${TRANSCRIBE_SCRIPT} \
+                "${downloaded_file}" \
+                --model ${whisper_model} \
+                ${whisper_lang ? '--lang ' + whisper_lang : ''} \
+                --output "${downloaded_file}.txt"
+            inputs:
+              downloaded_file: "${phase_1.output_path}"
+              whisper_model: "${whisper_model}"
+              whisper_lang: "${whisper_lang}"
+            outputs:
+              transcript_path: "${downloaded_file}.txt"
+              source_type: "TRANSCRIBED"
+      checkpoint:
+        id: CP_TRANSCRIPTION
         blocking: true
 
     - id: phase_2
@@ -73,8 +113,14 @@ workflow:
 
   transitions:
     - from: phase_1
+      to: phase_1_5
+      condition: "file_extension in AUDIO_VIDEO_EXTENSIONS"
+    - from: phase_1
       to: phase_2
-      condition: "file_downloaded"
+      condition: "file_extension NOT in AUDIO_VIDEO_EXTENSIONS"
+    - from: phase_1_5
+      to: phase_2
+      condition: "transcription_complete"
     - from: phase_2
       to: phase_3
       condition: "metadata_extracted"
@@ -86,3 +132,6 @@ workflow:
       type: string
     - name: metadata
       type: json
+    - name: transcription_model
+      type: string
+      description: "Modelo Whisper usado (null se não houve transcrição)"

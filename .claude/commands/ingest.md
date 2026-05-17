@@ -1,7 +1,7 @@
 ---
-description: Ingere material (YouTube, documentos, arquivos) na INBOX com metadados
-allowed-tools: Bash(cd:*), Bash(python:*), Bash(yt-dlp:*)
-argument-hint: [URL or path] [--person "Name"] [--type TYPE] [--process]
+description: Ingere material (YouTube, documentos, arquivos, áudio/vídeo) na INBOX com metadados
+allowed-tools: Bash(cd:*), Bash(python:*), Bash(python3.9:*), Bash(yt-dlp:*), Bash(ffprobe:*)
+argument-hint: [URL or path] [--person "Name"] [--type TYPE] [--model MODEL] [--process]
 ---
 
 # INGEST - Ingestão de Material
@@ -31,19 +31,34 @@ argument-hint: [URL or path] [--person "Name"] [--type TYPE] [--process]
 ```
 --person "Nome Pessoa"    # Define pessoa manualmente (senão detecta do path)
 --type PODCAST           # Define tipo (PODCAST, MASTERCLASS, COURSE, etc.)
+--model large-v3-turbo   # Modelo Whisper para transcrição (padrão: large-v3-turbo)
+--lang pt                # Idioma forçado para transcrição (padrão: auto-detect)
 --process                # Já inicia processamento após ingestão
 ```
+
+### Modelos disponíveis (`--model`)
+
+| Modelo | Velocidade | Quando usar |
+|--------|-----------|-------------|
+| `tiny` | ~40s/hora | Rascunho rápido |
+| `medium` | ~1min/hora | Bom equilíbrio |
+| `large-v3-turbo` | ~6min/hora | **Padrão** — knowledge base |
+| `large-v3` | ~10min/hora | Máxima qualidade |
 
 ---
 
 ## EXECUÇÃO
 
 ### Step 1: Identificar Tipo de Fonte
+
 ```
+AUDIO_VIDEO_EXTENSIONS = {.mp4, .m4a, .mp3, .wav, .ogg, .flac, .webm, .mkv, .mov, .avi, .aac, .opus}
+
 IF $SOURCE starts with "http":
   IF contains "youtube.com" or "youtu.be":
     -> TYPE = "YOUTUBE"
     -> Fetch transcript via youtube-transcript-api
+    -> IF no transcript available: TYPE = "YOUTUBE_AUDIO" → download audio → TRANSCRIBE
   ELSE IF contains "docs.google.com":
     -> TYPE = "GDOC"
     -> Download content
@@ -51,8 +66,37 @@ IF $SOURCE starts with "http":
     -> TYPE = "WEB"
     -> Fetch page content
 ELSE:
-  -> TYPE = "LOCAL"
-  -> Read file directly
+  -> extension = Path($SOURCE).suffix.lower()
+  -> IF extension in AUDIO_VIDEO_EXTENSIONS:
+       TYPE = "AUDIO" | "VIDEO"
+       -> GO TO Step 1.5 (TRANSCRIBE)
+  -> ELSE:
+       TYPE = "LOCAL"
+       -> Read file directly
+```
+
+### Step 1.5: Transcrição Local (apenas para AUDIO/VIDEO)
+
+```
+TRANSCRIBE_SCRIPT = "core/intelligence/transcribe.py"
+PYTHON39 = "/Library/Developer/CommandLineTools/usr/bin/python3.9"
+DEFAULT_MODEL = "large-v3-turbo"
+
+model = $model_flag OR DEFAULT_MODEL
+lang  = $lang_flag  OR None (auto-detect)
+
+Executar:
+  $PYTHON39 $TRANSCRIBE_SCRIPT "$SOURCE" \
+    --model $model \
+    [--lang $lang se definido] \
+    --output "/tmp/ingest_transcricao.txt"
+
+Exibir progresso:
+  "🎙️ Transcrevendo com mlx-whisper ($model)..."
+  "⏱️ Estimativa: ~Xmin para Ymin de áudio"
+
+SOURCE_TEXT = conteúdo de "/tmp/ingest_transcricao.txt"
+DURATION    = obtido via ffprobe antes da transcrição
 ```
 
 ### Step 2: Extrair/Detectar Metadados
@@ -96,7 +140,12 @@ WORD_COUNT = count words
 
 📥 MATERIAL INGERIDO
    Fonte: {URL ou PATH original}
-   Tipo: {VIDEO | DOCUMENTO | AUDIO}
+   Tipo: {VIDEO | DOCUMENTO | AUDIO | YOUTUBE}
+
+🎙️ TRANSCRIÇÃO (se AUDIO/VIDEO)
+   Motor: mlx-whisper local (Apple M3 Pro) — R$0,00
+   Modelo: {MODEL}
+   Tempo: {ELAPSED}s para {DURATION}min de áudio
 
 📁 DESTINO
    Path: inbox/{PESSOA}/{TIPO}/{arquivo}.txt
@@ -104,7 +153,7 @@ WORD_COUNT = count words
 
 📊 ESTATÍSTICAS
    Palavras: {WORD_COUNT}
-   Duração estimada: {DURATION se disponível}
+   Duração: {DURATION} (se disponível)
    Pessoa detectada: {PERSON_NAME}
 
 ⭐️ PRÓXIMA ETAPA
@@ -169,13 +218,19 @@ Append to `/logs/AUDIT/audit.jsonl`:
 ## EXEMPLOS
 
 ```bash
-# YouTube video
+# YouTube video (transcrição automática se sem legenda)
 /ingest https://youtube.com/watch?v=abc123
 
 # YouTube com pessoa específica
 /ingest https://youtube.com/watch?v=abc123 --person "Cole Gordon"
 
-# Arquivo local
+# Arquivo de áudio local → transcreve automaticamente com large-v3-turbo
+/ingest "/Users/.../Andar olhando para trás.m4a" --person "Matheus"
+
+# Arquivo de vídeo local com modelo específico
+/ingest "/Downloads/masterclass.mp4" --model medium --lang pt --type MASTERCLASS
+
+# Arquivo de texto já transcrito
 /ingest "/path/to/transcription.txt" --type MASTERCLASS
 
 # Ingerir e já processar
