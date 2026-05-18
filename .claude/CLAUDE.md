@@ -1,4 +1,4 @@
-# Mega Brain - AI Knowledge Management System
+    # Mega Brain - AI Knowledge Management System
 
 ## What is Mega Brain?
 
@@ -96,6 +96,7 @@ Defined in `AGENT-INDEX.yaml`, activated via slash commands.
 | SYSTEM | 2 | JARVIS, Agent-Creator |
 
 **Total Active Agents:** 37
+
 ## Configuration
 
 - **`.env`** is the ONLY source of truth for credentials
