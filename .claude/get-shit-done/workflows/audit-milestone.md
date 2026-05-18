@@ -6,26 +6,33 @@ Verify milestone achieved its definition of done by aggregating phase verificati
 Read all files referenced by the invoking prompt's execution_context before starting.
 </required_reading>
 
+<available_agent_types>
+Valid GSD subagent types (use exact names — do not fall back to 'general-purpose'):
+- gsd-integration-checker — Checks cross-phase integration
+</available_agent_types>
+
 <process>
 
 ## 0. Initialize Milestone Context
 
 ```bash
-INIT=$(node ./.claude/get-shit-done/bin/gsd-tools.cjs init milestone-op)
+INIT=$(gsd-sdk query init.milestone-op)
+if [[ "$INIT" == @file:* ]]; then INIT=$(cat "${INIT#@file:}"); fi
+AGENT_SKILLS_CHECKER=$(gsd-sdk query agent-skills gsd-integration-checker)
 ```
 
 Extract from init JSON: `milestone_version`, `milestone_name`, `phase_count`, `completed_phases`, `commit_docs`.
 
 Resolve integration checker model:
 ```bash
-CHECKER_MODEL=$(node ./.claude/get-shit-done/bin/gsd-tools.cjs resolve-model gsd-integration-checker --raw)
+integration_checker_model=$(gsd-sdk query resolve-model gsd-integration-checker --raw)
 ```
 
 ## 1. Determine Milestone Scope
 
 ```bash
 # Get phases in milestone (sorted numerically, handles decimals)
-node ./.claude/get-shit-done/bin/gsd-tools.cjs phases list
+gsd-sdk query phases.list
 ```
 
 - Parse version from arguments or detect current from ROADMAP.md
@@ -39,7 +46,7 @@ For each phase directory, read the VERIFICATION.md:
 
 ```bash
 # For each phase, use find-phase to resolve the directory (handles archived phases)
-PHASE_INFO=$(node ./.claude/get-shit-done/bin/gsd-tools.cjs find-phase 01 --raw)
+PHASE_INFO=$(gsd-sdk query find-phase 01 --raw)
 # Extract directory from JSON, then read VERIFICATION.md from that directory
 # Repeat for each phase number from ROADMAP.md
 ```
@@ -60,7 +67,7 @@ With phase context collected:
 Extract `MILESTONE_REQ_IDS` from REQUIREMENTS.md traceability table — all REQ-IDs assigned to phases in this milestone.
 
 ```
-Task(
+Agent(
   prompt="Check cross-phase integration and E2E flows.
 
 Phases: {phase_dirs}
@@ -72,11 +79,14 @@ Milestone Requirements:
 
 MUST map each integration finding to affected requirement IDs where applicable.
 
-Verify cross-phase wiring and E2E user flows.",
+Verify cross-phase wiring and E2E user flows.
+${AGENT_SKILLS_CHECKER}",
   subagent_type="gsd-integration-checker",
   model="{integration_checker_model}"
 )
 ```
+
+> **ORCHESTRATOR RULE — CODEX RUNTIME**: After calling Agent() above, stop working on this task immediately. Do not read more files, edit code, or run tests related to this task while the subagent is active. Wait for the subagent to return its result. This prevents duplicate work, conflicting edits, and wasted context. Only resume when the subagent result is available.
 
 ## 4. Collect Results
 
@@ -104,7 +114,8 @@ For each phase's VERIFICATION.md, extract the expanded requirements table:
 For each phase's SUMMARY.md, extract `requirements-completed` from YAML frontmatter:
 ```bash
 for summary in .planning/phases/*-*/*-SUMMARY.md; do
-  node ./.claude/get-shit-done/bin/gsd-tools.cjs summary-extract "$summary" --fields requirements_completed | jq -r '.requirements_completed'
+  [ -e "$summary" ] || continue
+  gsd-sdk query summary-extract "$summary" --fields requirements_completed --pick requirements_completed
 done
 ```
 
@@ -126,6 +137,30 @@ For each REQ-ID, determine status using all three sources:
 **REQUIRED:** Any `unsatisfied` requirement MUST force `gaps_found` status on the milestone audit.
 
 **Orphan detection:** Requirements present in REQUIREMENTS.md traceability table but absent from ALL phase VERIFICATION.md files MUST be flagged as orphaned. Orphaned requirements are treated as `unsatisfied` — they were assigned but never verified by any phase.
+
+## 5.5. Nyquist Compliance Discovery
+
+Skip if `workflow.nyquist_validation` is explicitly `false` (absent = enabled).
+
+```bash
+NYQUIST_CONFIG=$(gsd-sdk query config-get workflow.nyquist_validation --raw 2>/dev/null)
+```
+
+If `false`: skip entirely.
+
+For each phase directory, check `*-VALIDATION.md`. If exists, parse frontmatter (`nyquist_compliant`, `wave_0_complete`).
+
+Classify per phase:
+
+| Status | Condition |
+|--------|-----------|
+| COMPLIANT | `nyquist_compliant: true` and all tasks green |
+| PARTIAL | VALIDATION.md exists, `nyquist_compliant: false` or red/pending |
+| MISSING | No VALIDATION.md |
+
+Add to audit YAML: `nyquist: { compliant_phases, partial_phases, missing_phases, overall }`
+
+Discovery only — never auto-calls `/gsd:validate-phase`.
 
 ## 6. Aggregate into v{version}-MILESTONE-AUDIT.md
 
@@ -192,13 +227,13 @@ All requirements covered. Cross-phase integration verified. E2E flows complete.
 
 ───────────────────────────────────────────────────────────────
 
-## ▶ Next Up
+## ▶ Next Up — [${PROJECT_CODE}] ${PROJECT_TITLE}
 
 **Complete milestone** — archive and tag
 
-/gsd:complete-milestone {version}
+/clear then:
 
-<sub>/clear first → fresh context window</sub>
+/gsd:complete-milestone {version}
 
 ───────────────────────────────────────────────────────────────
 
@@ -227,15 +262,34 @@ All requirements covered. Cross-phase integration verified. E2E flows complete.
 {For each flow gap:}
 - **{flow name}:** breaks at {step}
 
+### Nyquist Coverage
+
+| Phase | VALIDATION.md | Compliant | Action |
+|-------|---------------|-----------|--------|
+| {phase} | exists/missing | true/false/partial | `/gsd:validate-phase {N}` |
+
+Phases needing validation: run `/gsd:validate-phase {N}` for each flagged phase.
+
 ───────────────────────────────────────────────────────────────
 
-## ▶ Next Up
+## ▶ Next Up — [${PROJECT_CODE}] ${PROJECT_TITLE}
 
-**Plan gap closure** — create phases to complete milestone
+**Close the gaps inline** — gap planning happens as part of this audit's
+output (see the Unsatisfied Requirements, Cross-Phase Issues, Broken Flows,
+and Nyquist Coverage sections above). Insert one closure phase per gap (or
+per group of related gaps) using the standard phase chain:
 
-/gsd:plan-milestone-gaps
+/clear then:
 
-<sub>/clear first → fresh context window</sub>
+/gsd:phase --insert <N> "Close gap: <REQ-ID> — <description>"
+/gsd:discuss-phase <N>
+/gsd:plan-phase <N>
+/gsd:execute-phase <N>
+
+For Nyquist-coverage gaps flagged in the table above, prefer running
+`/gsd:validate-phase <N>` for each flagged phase (and `/gsd:secure-phase
+<N>` if SECURITY.md was flagged) before inserting a new closure phase —
+they may close the gap retroactively without a new phase.
 
 ───────────────────────────────────────────────────────────────
 
@@ -273,11 +327,15 @@ All requirements met. No critical blockers. Accumulated tech debt needs review.
 
 /gsd:complete-milestone {version}
 
-**B. Plan cleanup phase** — address debt before completing
+**B. Plan a cleanup phase** — address the debt above before completing.
+Insert a closure phase using the standard chain:
 
-/gsd:plan-milestone-gaps
+/clear then:
 
-<sub>/clear first → fresh context window</sub>
+/gsd:phase --insert <N> "Address tech debt: <area>"
+/gsd:discuss-phase <N>
+/gsd:plan-phase <N>
+/gsd:execute-phase <N>
 
 ───────────────────────────────────────────────────────────────
 </offer_next>
@@ -293,5 +351,7 @@ All requirements met. No critical blockers. Accumulated tech debt needs review.
 - [ ] Integration checker spawned with milestone requirement IDs
 - [ ] v{version}-MILESTONE-AUDIT.md created with structured requirement gap objects
 - [ ] FAIL gate enforced — any unsatisfied requirement forces gaps_found status
+- [ ] Nyquist compliance scanned for all milestone phases (if enabled)
+- [ ] Missing VALIDATION.md phases flagged with validate-phase suggestion
 - [ ] Results presented with actionable next steps
 </success_criteria>

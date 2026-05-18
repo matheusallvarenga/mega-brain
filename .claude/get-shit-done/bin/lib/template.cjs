@@ -4,7 +4,9 @@
 
 const fs = require('fs');
 const path = require('path');
-const { normalizePhaseName, findPhaseInternal, generateSlugInternal, output, error } = require('./core.cjs');
+const { normalizePhaseName, findPhaseInternal, generateSlugInternal, toPosixPath, output, error } = require('./core.cjs');
+const { platformWriteSync } = require('./shell-command-projection.cjs');
+const { planningDir } = require('./planning-workspace.cjs');
 const { reconstructFrontmatter } = require('./frontmatter.cjs');
 
 function cmdTemplateSelect(cwd, planPath, raw) {
@@ -131,6 +133,10 @@ function cmdTemplateFill(cwd, templateType, options, raw) {
         must_haves: { truths: [], artifacts: [], key_links: [] },
         ...fields,
       };
+      const planBase = planningDir(cwd);
+      const projectRef = toPosixPath(path.relative(cwd, path.join(planBase, 'PROJECT.md')));
+      const roadmapRef = toPosixPath(path.relative(cwd, path.join(planBase, 'ROADMAP.md')));
+      const stateRef = toPosixPath(path.relative(cwd, path.join(planBase, 'STATE.md')));
       body = [
         `# Phase ${options.phase} Plan ${planNum}: [Title]`,
         '',
@@ -140,9 +146,9 @@ function cmdTemplateFill(cwd, templateType, options, raw) {
         '- **Output:** [Concrete deliverable]',
         '',
         '## Context',
-        '@.planning/PROJECT.md',
-        '@.planning/ROADMAP.md',
-        '@.planning/STATE.md',
+        `@${projectRef}`,
+        `@${roadmapRef}`,
+        `@${stateRef}`,
         '',
         '## Tasks',
         '',
@@ -210,12 +216,12 @@ function cmdTemplateFill(cwd, templateType, options, raw) {
   const outPath = path.join(cwd, phaseInfo.directory, fileName);
 
   if (fs.existsSync(outPath)) {
-    output({ error: 'File already exists', path: path.relative(cwd, outPath) }, raw);
+    output({ error: 'File already exists', path: toPosixPath(path.relative(cwd, outPath)) }, raw);
     return;
   }
 
-  fs.writeFileSync(outPath, fullContent, 'utf-8');
-  const relPath = path.relative(cwd, outPath);
+  platformWriteSync(outPath, fullContent);
+  const relPath = toPosixPath(path.relative(cwd, outPath));
   output({ created: true, path: relPath, template: templateType }, raw, relPath);
 }
 

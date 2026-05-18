@@ -1,7 +1,7 @@
 ---
 name: gsd:verify-work
 description: Validate built features through conversational UAT
-argument-hint: "[phase number, e.g., '4']"
+argument-hint: "[phase number, e.g., '4'] [--ws <name>]"
 allowed-tools:
   - Read
   - Bash
@@ -9,7 +9,8 @@ allowed-tools:
   - Grep
   - Edit
   - Write
-  - Task
+  - Agent
+requires: [execute-phase, phase]
 ---
 <objective>
 Validate built features through conversational testing with persistent state.
@@ -20,8 +21,8 @@ Output: {phase_num}-UAT.md tracking all test results. If issues found: diagnosed
 </objective>
 
 <execution_context>
-@./.claude/get-shit-done/workflows/verify-work.md
-@./.claude/get-shit-done/templates/UAT.md
+@/Users/matheusallvarenga/Desktop/itm-dev/github/03-third-party-repos/mega-brain/.claude/get-shit-done/workflows/verify-work.md
+@/Users/matheusallvarenga/Desktop/itm-dev/github/03-third-party-repos/mega-brain/.claude/get-shit-done/templates/UAT.md
 </execution_context>
 
 <context>
@@ -33,6 +34,6 @@ Context files are resolved inside the workflow (`init verify-work`) and delegate
 </context>
 
 <process>
-Execute the verify-work workflow from @./.claude/get-shit-done/workflows/verify-work.md end-to-end.
+Execute end-to-end.
 Preserve all workflow gates (session management, test presentation, diagnosis, fix planning, routing).
 </process>
